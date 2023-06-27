@@ -12,27 +12,52 @@ console.log("LOGFILE:", logfile);
 console.log("WEBHOOK:", webhookurl);
 const axios = require('axios');
 const Tail = require('tail').Tail;
+const Promise = require('es6-promise').Promise;
 let logp = new Tail(logfile, { follow: true });
 
-postToDiscord = async function (message) {
-  await axios.post(webhookurl, {
-    content: '```xl\n' + message.substring(0, 2000) + '\n```'
-  });
-  message = message.substring(2000);
-  while (message.length >= 2000) {
-    await axios.post(webhookurl, {
-      content: '```xl\n' + message.substring(0, 2000) + '\n```'
-    });
-    message = message.substring(2000);
-  }
+const rateLimitDelay = 1000; //adjusts the send rate to Discord
+let rateLimitActive = false;
 
-}
+postToDiscord = async function (message) {
+  const postMessage = async (content) => {
+    await axios.post(webhookurl, {
+      content: '```\n' + content.substring(0, 1993) + '\n```'
+    });
+    await new Promise((resolve) => setTimeout(resolve, rateLimitDelay));
+  };
+
+  let remainingMessage = message;
+  while (remainingMessage.length > 0) {
+    const content = remainingMessage.substring(0, 1993);
+    await postMessage(content);
+    remainingMessage = remainingMessage.substring(1993);
+  }
+};
+
+
 logp.on('exit', (code, signal) => {
   console.log('LOGS EXIT');
-})
+});
+
 function handle(message) {
-  postToDiscord(message).then(() => console.log("Sent message:", message)).catch((e) => console.error("Error occured: ", e))
+  postToDiscord(message)
+    .then(() => console.log("Sent message:", message))
+    .catch((e) => console.error("Error occurred:", e))
+    .finally(() => {
+      rateLimitActive = false;
+    });
 }
 
-logp.on('line', postToDiscord);
-logp.on("error", postToDiscord);
+logp.on('line', (line) => {
+  if (!rateLimitActive) {
+    rateLimitActive = true;
+    handle(line);
+  }
+});
+
+logp.on("error", (error) => {
+  if (!rateLimitActive) {
+    rateLimitActive = true;
+    handle(`Error occurred: ${error}`);
+  }
+});
